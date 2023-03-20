@@ -5,6 +5,7 @@ import os
 import sys
 import seaborn as sns
 import matplotlib.pyplot as plt
+import itertools
 
 student_nr = 's4917340'
 root_path = os.path.join(sys.path[0])
@@ -73,17 +74,60 @@ def plot_kaplanmeier_estimation(data, machine_name):
     sns.lineplot(x="Duration", y="Reliability", data=data)
     plt.savefig(os.path.join(plot_path, f'Kaplan-Meier-results-machine-{machine_name}.png'))
 
+#Weibull distribution fitting
+def fit_weibull_distribution(prepared_data : pd.DataFrame):
+    # 1. Create a variable with the search ranges for lambda and kappa
+    l_range = np.linspace(start=1, stop=35, num=10)
+    k_range = np.linspace(start=0.1, stop=3.5, num=10)
+
+    # 2. Create a dataframe which will contain your likelihood data
+    #source: https://stackoverflow.com/questions/1208118/using-numpy-to-build-an-array-of-all-combinations-of-two-arrays 
+    pairs = np.array(list(itertools.product(l_range, k_range)))
+    df_weibull = pd.DataFrame(columns=['Lambda', 'Kappa'], data=pairs)
+
+    # 3. Create  log-likelihood  data  for  each  event  in  your  dataset.
+    for observation_index, observation_row in prepared_data.iterrows():
+        column_name = 'Observation ' + str(observation_index)
+        df_weibull[column_name] = 0
+        for row_index in range(len(df_weibull)):
+            l = df_weibull.loc[row_index, 'Lambda']
+            k = df_weibull.loc[row_index, 'Kappa']
+
+            duration = observation_row['Duration']
+            censored = observation_row['Censored']
+
+            if censored == 'No':
+                #log (f(x))
+                fx = (k / l) * (duration / l) ** (k-1) * math.exp(-(duration/l)**k)
+                log_likelihood = np.log(fx)
+            else:
+                # log (R(x)) = log (1-F(x))
+                Rx = math.exp(-(duration/l)**k)
+                log_likelihood = np.log(Rx)
+            df_weibull.loc[row_index, column_name] = log_likelihood
+
+    # 4. Calculate the sum of the log-likelihoods. 
+    # get all the column names starting with Observation
+    observation_columns = df_weibull.columns[df_weibull.columns.str.contains(pat='Observation')].tolist()
+    df_weibull['Loglikelihood_sum'] = df_weibull[observation_columns].sum()
+    print(df_weibull)
+
+
+    return
+
 def run_analysis():
-    machine_name = 'test'
+    machine_name = 1
     machine_data = pd.read_csv(os.path.join(data_path, f'{student_nr}-Machine-{machine_name}.csv'))
     prepared_data = data_preparation(machine_data)
     KM_data = create_kaplanmeier_data(prepared_data)
     MTBF_KM = meantimebetweenfailures_KM(KM_data)
     print('The MTBF-KaplanMeier is: ', MTBF_KM)
+
+    #Weibull fitting
+    fit_weibull_distribution(prepared_data)
     return KM_data
 
 result = run_analysis()
-print(result)
 
 
 
