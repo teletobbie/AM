@@ -3,9 +3,13 @@ import numpy as np
 import math
 import os
 import sys
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 student_nr = 's4917340'
-path = os.path.join(sys.path[0], 'data')
+root_path = os.path.join(sys.path[0])
+data_path = os.path.join(root_path, 'data')
+plot_path = os.path.join(root_path, 'plot')
 pd.set_option('display.max_rows', None)
 
 def data_preparation(machine_data : pd.DataFrame):
@@ -57,15 +61,31 @@ def create_kaplanmeier_data(prepared_data : pd.DataFrame):
             prepared_data.at[index, 'Reliability'] = reliability
         else:
             prepared_data.at[index, 'Reliability'] = reliability
-    print(prepared_data)
     return prepared_data
 
+# Mean time between failures (Kaplan-Meier)
+def meantimebetweenfailures_KM(KM_data : pd.DataFrame):
+    KM_data['MTBF'] = KM_data['Duration'] * KM_data['Probability']
+    return KM_data['MTBF'].sum()
+
+def plot_kaplanmeier_estimation(data, machine_name):
+    plt.title(f'Kaplan-Meier estimator for machine {machine_name}')
+    sns.lineplot(x="Duration", y="Reliability", data=data)
+    plt.savefig(os.path.join(plot_path, f'Kaplan-Meier-results-machine-{machine_name}.png'))
+
 def run_analysis():
-    machine_name = 1
-    machine_data = pd.read_csv(os.path.join(path, f'{student_nr}-Machine-{machine_name}.csv'))
+    machine_name = 'test'
+    machine_data = pd.read_csv(os.path.join(data_path, f'{student_nr}-Machine-{machine_name}.csv'))
     prepared_data = data_preparation(machine_data)
     KM_data = create_kaplanmeier_data(prepared_data)
+    MTBF_KM = meantimebetweenfailures_KM(KM_data)
+    print('The MTBF-KaplanMeier is: ', MTBF_KM)
     return KM_data
 
 result = run_analysis()
+print(result)
+
+
+
+
 
