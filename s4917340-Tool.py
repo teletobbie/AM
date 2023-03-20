@@ -12,7 +12,6 @@ def data_preparation(machine_data : pd.DataFrame):
     machine_data['Censored'] = machine_data['Event'].map({'failure': 'No', 'PM':'Yes'})
     machine_data['Duration'] = machine_data['Time'].diff(periods=1).fillna(0)
     machine_data = machine_data.sort_values(by='Duration', ascending=True)
-
     # source: https://stackoverflow.com/questions/67845362/sort-pandas-df-subset-of-rows-within-a-group-by-specific-column 
     # source: https://sparkbyexamples.com/pandas/pandas-groupby-sort-within-groups/
     machine_data = machine_data.groupby('Duration').apply(lambda x: x.sort_values(by=['Event'], ascending=False))
@@ -20,7 +19,7 @@ def data_preparation(machine_data : pd.DataFrame):
 
     return machine_data
 
-# Kaplan-Meier estimator for updating the probablities based on observed events 
+# 2. Kaplan-Meier estimator for updating the probablities based on observed events 
 def update_probabilities(prepared_data : pd.DataFrame):
     for index, row in prepared_data.iterrows():
         if row['Event'] == 'PM':
@@ -36,28 +35,37 @@ def update_probabilities(prepared_data : pd.DataFrame):
 def create_kaplanmeier_data(prepared_data : pd.DataFrame):
     # 1. Add a column named probability to the dataframe
     prepared_data['Probability'] = 1/len(prepared_data)
-    
+
     # 2. Update proabilities based on the observed events 
     prepared_data = update_probabilities(prepared_data)
-    
-    # 3. Merge duplicated, failure (censored == No) durations 
-    # group the dataframe with duplicates by duration and aggrated sum on proability
-    grouped = prepared_data.groupby('Duration').agg({'Probability': 'sum'}).reset_index()
 
+    # 3. Merge duplicated, failure (censored == No) durations 
+    # group the dataframe with duplicates by duration and aggrated sum on proability column
+    grouped = prepared_data.groupby('Duration').agg({'Probability': 'sum'}).reset_index()
     prepared_data['summed_prob'] = prepared_data['Duration'].map(grouped.set_index('Duration')['Probability'])
-        
-    mask = (prepared_data['Event'] == 'failure') & (prepared_data.duplicated(subset='Duration', keep='first'))
+    mask = (prepared_data.duplicated('Duration', keep=False)) & (prepared_data['Event'] == 'failure') #mark all duplicates
     prepared_data.loc[mask, 'Probability'] = prepared_data.loc[mask, 'summed_prob']
-    prepared_data.loc[~mask, 'Probability'] = 0
-    
+    mask2 = (prepared_data.duplicated('Duration')) & (prepared_data['Event'] == 'failure') # mark all dups besides the first one
+    prepared_data.loc[mask2, 'Probability'] = 0
+    prepared_data = prepared_data.drop('summed_prob', axis=1)
+
+    # 4. Calculate the reliability function for each duration 
+    reliability = 1
+    for index, row in prepared_data.iterrows():
+        if row['Event'] == 'failure':
+            reliability -= row['Probability']
+            prepared_data.at[index, 'Reliability'] = reliability
+        else:
+            prepared_data.at[index, 'Reliability'] = reliability
+    print(prepared_data)
     return prepared_data
 
 def run_analysis():
-    machine_name = 'test'
+    machine_name = 1
     machine_data = pd.read_csv(os.path.join(path, f'{student_nr}-Machine-{machine_name}.csv'))
     prepared_data = data_preparation(machine_data)
     KM_data = create_kaplanmeier_data(prepared_data)
     return KM_data
 
-
 result = run_analysis()
+
