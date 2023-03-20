@@ -8,19 +8,15 @@ student_nr = 's4917340'
 path = os.path.join(sys.path[0], 'data')
 pd.set_option('display.max_rows', None)
 
-# TODO: 
-# 1. Ask how it works when you have duplicates on duration within the data preperation set; what should I do when two or more PM durations are the same? (remove them?)
-
 def data_preparation(machine_data : pd.DataFrame):
     machine_data['Censored'] = machine_data['Event'].map({'failure': 'No', 'PM':'Yes'})
     machine_data['Duration'] = machine_data['Time'].diff(periods=1).fillna(0)
     machine_data = machine_data.sort_values(by='Duration', ascending=True)
 
-    #TODO: if duration is duplicated PM should be behind the Failure 
-    # mask = (machine_data['Event'] == 'PM') & (machine_data.duplicated(subset=['Duration'])) # if duration is duplicated and event == PM, then remove entry????? Or what??
-    # machine_data = machine_data[mask == False]
+    # source: https://stackoverflow.com/questions/67845362/sort-pandas-df-subset-of-rows-within-a-group-by-specific-column 
+    # source: https://sparkbyexamples.com/pandas/pandas-groupby-sort-within-groups/
+    machine_data = machine_data.groupby('Duration').apply(lambda x: x.sort_values(by=['Event'], ascending=False))
     machine_data = machine_data.reset_index(drop=True)
-    # print(machine_data[machine_data.duplicated(subset=['Duration'])])
 
     return machine_data
 
@@ -46,17 +42,13 @@ def create_kaplanmeier_data(prepared_data : pd.DataFrame):
     
     # 3. Merge duplicated, failure (censored == No) durations 
     # group the dataframe with duplicates by duration and aggrated sum on proability
-    grouped = prepared_data[(prepared_data.duplicated('Duration', keep=False)) & (prepared_data['Event'] == 'failure')].groupby('Duration').agg({'Probability': 'sum'}).reset_index()
-    dup_rows = prepared_data[(prepared_data.duplicated('Duration', keep=False)) & (prepared_data['Event'] == 'failure')]
-    for index, dup_row in dup_rows.iterrows():
+    grouped = prepared_data.groupby('Duration').agg({'Probability': 'sum'}).reset_index()
+
+    prepared_data['summed_prob'] = prepared_data['Duration'].map(grouped.set_index('Duration')['Probability'])
         
-
-        
-
-
-
-    
-    
+    mask = (prepared_data['Event'] == 'failure') & (prepared_data.duplicated(subset='Duration', keep='first'))
+    prepared_data.loc[mask, 'Probability'] = prepared_data.loc[mask, 'summed_prob']
+    prepared_data.loc[~mask, 'Probability'] = 0
     
     return prepared_data
 
