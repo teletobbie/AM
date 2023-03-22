@@ -100,11 +100,11 @@ def fit_weibull_distribution(prepared_data : pd.DataFrame):
             censored = observation_row['Censored']
 
             if censored == 'No':
-                #log (f(x))
+                #log (f(x)) density function : likelihood of failure at time t (failure) 
                 fx = (k / l) * (duration / l) ** (k-1) * math.exp(-(duration/l)**k)
                 log_likelihood = np.log(fx)
             else:
-                # log (R(x)) = log (1-F(x))
+                # log (R(x)) = log (1-F(x)) probability of survival before time t (PM)
                 Rx = math.exp(-(duration/l)**k)
                 log_likelihood = np.log(Rx)
             df_weibull.loc[row_index, column_name] = log_likelihood
@@ -115,17 +115,16 @@ def fit_weibull_distribution(prepared_data : pd.DataFrame):
     # sum the loglikelihood of each observation per row
     df_weibull['Loglikelihood_sum'] = df_weibull[observation_columns].sum(axis=1)
     print(df_weibull)
-
     # get the optimal Lambda and Kappa based on the max Loglikelihood sum
     max_loglikelihood_sum = df_weibull['Loglikelihood_sum'].max() 
     best_l_k = df_weibull[df_weibull['Loglikelihood_sum'] == max_loglikelihood_sum][['Lambda', 'Kappa']]
     return best_l_k['Lambda'].values[0], best_l_k['Kappa'].values[0]
 
-def create_weibull_curve_data(prepared_data, lamb_val, kap_val):
+def create_weibull_curve_data(prepared_data : pd.DataFrame, lamb_val, kap_val):
     # Create an new dataframe with t durations and reliability R_t
     weibull_data = pd.DataFrame(columns=['t', 'R_t'])
     # Create an range of durations from the 0 to length of the prepared data 
-    weibull_data['t'] = np.arange(0, len(prepared_data), 0.1)
+    weibull_data['t'] = np.arange(0, prepared_data['Duration'].max(), 0.01)
     # Reliability distribution function. The opposite of F(t), the probability of survival until t
     weibull_data['R_t'] = np.exp(-(weibull_data['t']/lamb_val)**kap_val) 
     return weibull_data
@@ -139,7 +138,46 @@ def visualization(KM_data : pd.DataFrame, weibull_data : pd.DataFrame, machine_n
     ax.set_ylabel('Reliability')
     ax.legend()
     plt.savefig(os.path.join(plot_path, f'{student_nr}-Machine-{machine_name}-Reliability.png'))
+    plt.close()
 
+# Create a plot of the cost rates
+def plot_cost_rates(maintenance_data : pd.DataFrame, machine_name):
+    fig, ax = plt.subplots()
+    x_min, x_max = 1, round(maintenance_data['t'].max())
+
+    ax.set_title(f'Maintenance age impact on cost for machine {machine_name}')
+    ax.plot(maintenance_data['t'], maintenance_data['cost_rate'])
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Cost')
+    plt.savefig(os.path.join(plot_path, f'{student_nr}-Machine-{machine_name}-Costs.png'))
+
+def create_cost_data(prepared_data : pd.DataFrame, l, k, PM_cost, CM_cost, machine_name):
+    # 1. Define a range of maintenance ages 
+    maintenance_data = pd.DataFrame()
+    maintenance_data['t'] = np.arange(0, prepared_data['Duration'].max(), 0.01)
+    # 2. Calculate the values F(t) and R(t) for each maintenance age
+    maintenance_data['F_t'] = 1 - np.exp(-(maintenance_data['t']/l)**k) 
+    maintenance_data['R_t'] = np.exp(-(maintenance_data['t']/l)**k) 
+    # 3. Calculate the mean cost per cycle (MCPC) for each maintenance age 
+    maintenance_data['MCPC'] = CM_cost * maintenance_data['F_t'] + PM_cost * maintenance_data['R_t']
+    # 4. Calculate the mean cycle length (MCL) by approximating the area under curve using Riemann sum
+    delta = 0.01
+    t = maintenance_data['t'].values
+    R_t = maintenance_data['R_t'].values
+    riemann_sum = 0
+    for i in range(len(t)):
+        riemann_sum += R_t[i] * delta
+
+    # 5. Calculate the cost rate for each maintenance age
+    maintenance_data['cost_rate'] = maintenance_data['MCPC'] / riemann_sum
+    print(maintenance_data)
+
+    # 6. Create a plot of cost rates
+    plot_cost_rates(maintenance_data, machine_name)
+
+    # 7. determine the optimal maintenance age and the corresponding cost rate 
+    optimal = maintenance_data[maintenance_data['cost_rate'] == maintenance_data['cost_rate'].min()]
+    return optimal['t'].values[0], optimal['cost_rate'].values[0]
 
 def run_analysis():
     machine_name = 1
@@ -150,6 +188,7 @@ def run_analysis():
     MTBF_KM = meantimebetweenfailures_KM(KM_data)
 
     # Weibull fitting
+    print(prepared_data)
     lamb_val, kap_val = fit_weibull_distribution(prepared_data)
     print(f'\nBest Lambda & Kappa values for machine {machine_name} are {lamb_val} and {kap_val}')
 
@@ -160,8 +199,14 @@ def run_analysis():
 
     # Weibull data
     weibull_data = create_weibull_curve_data(prepared_data, lamb_val, kap_val)
-    weibull_data_to_plot = weibull_data[weibull_data['t'] <= KM_data['Duration'].max()]
-    visualization(KM_data, weibull_data_to_plot, machine_name)
+
+    visualization(KM_data, weibull_data, machine_name)
+
+    # Age-based maintenance
+    PM_cost = 5
+    CM_cost = 20
+    best_age, best_cost_rate = create_cost_data(prepared_data, lamb_val, kap_val, PM_cost, CM_cost, machine_name)
+    print(best_age, best_cost_rate)
     return
 
 run_analysis()
