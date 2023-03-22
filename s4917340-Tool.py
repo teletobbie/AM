@@ -15,7 +15,7 @@ plot_path = os.path.join(root_path, 'plot')
 
 def data_preparation(machine_data : pd.DataFrame):
     machine_data['Censored'] = machine_data['Event'].map({'failure': 'No', 'PM':'Yes'})
-    machine_data['Duration'] = machine_data['Time'].diff(periods=1).fillna(0)
+    machine_data['Duration'] = machine_data['Time'].diff(periods=1).fillna(machine_data['Time'].iloc[0])
     machine_data = machine_data.sort_values(by='Duration', ascending=True)
     # source: https://stackoverflow.com/questions/67845362/sort-pandas-df-subset-of-rows-within-a-group-by-specific-column 
     # source: https://sparkbyexamples.com/pandas/pandas-groupby-sort-within-groups/
@@ -92,7 +92,6 @@ def fit_weibull_distribution(prepared_data : pd.DataFrame):
     # 3. Create  log-likelihood  data  for  each  event  in  your  dataset.
     for observation_index, observation_row in prepared_data.iterrows():
         column_name = 'Observation ' + str(observation_index)
-        # df_weibull[column_name] = 0
         for row_index in range(len(df_weibull)):
             l = df_weibull.loc[row_index, 'Lambda']
             k = df_weibull.loc[row_index, 'Kappa']
@@ -114,7 +113,7 @@ def fit_weibull_distribution(prepared_data : pd.DataFrame):
     # get all the column names starting with Observation
     observation_columns = df_weibull.columns[df_weibull.columns.str.contains(pat='Observation')].tolist()
     # sum the loglikelihood of each observation per row
-    df_weibull['Loglikelihood_sum'] = df_weibull[observation_columns[1:]].sum(axis=1)
+    df_weibull['Loglikelihood_sum'] = df_weibull[observation_columns].sum(axis=1)
     print(df_weibull)
 
     # get the optimal Lambda and Kappa based on the max Loglikelihood sum
@@ -126,19 +125,19 @@ def create_weibull_curve_data(prepared_data, lamb_val, kap_val):
     # Create an new dataframe with t durations and reliability R_t
     weibull_data = pd.DataFrame(columns=['t', 'R_t'])
     # Create an range of durations from the 0 to length of the prepared data 
-    weibull_data['t'] = np.arange(0, len(prepared_data), 0.01)
+    weibull_data['t'] = np.arange(0, len(prepared_data), 0.1)
     # Reliability distribution function. The opposite of F(t), the probability of survival until t
-    reliablity_dist = np.exp(-(weibull_data['t']/lamb_val)**kap_val) 
-    weibull_data['R_t'] = np.round(reliablity_dist, 1)
+    weibull_data['R_t'] = np.exp(-(weibull_data['t']/lamb_val)**kap_val) 
     return weibull_data
 
 def visualization(KM_data : pd.DataFrame, weibull_data : pd.DataFrame, machine_name):
-    plt.title(f'Visualization of reliability functions of machine {machine_name}')
-    max_duration_KM = KM_data['Duration'].max()
-    plt.plot(weibull_data.loc[weibull_data['t'] <= max_duration_KM]['t'], weibull_data.loc[weibull_data['t'] <= max_duration_KM]['R_t'], label='Weibull')
-    # plt.plot(weibull_data['t'], weibull_data['R_t'], label='Weibull')
-    plt.plot(KM_data['Duration'], KM_data['Reliability'], label='Kaplan-Meier')
-    plt.legend()
+    fig, ax = plt.subplots()
+    ax.set_title(f'Visualization of reliability functions of machine {machine_name}')
+    ax.step(KM_data['Duration'], KM_data['Reliability'], where="post", label='Kaplan-Meier')
+    ax.plot(weibull_data['t'], weibull_data['R_t'], label='Weibull')
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Reliability')
+    ax.legend()
     plt.savefig(os.path.join(plot_path, f'{student_nr}-Machine-{machine_name}-Reliability.png'))
 
 
@@ -149,21 +148,20 @@ def run_analysis():
     KM_data = create_kaplanmeier_data(prepared_data)
     plot_kaplanmeier_estimation(KM_data[['Duration', 'Reliability']], machine_name)
     MTBF_KM = meantimebetweenfailures_KM(KM_data)
-    print('The MTBF-KaplanMeier is:', MTBF_KM)
 
     # Weibull fitting
     lamb_val, kap_val = fit_weibull_distribution(prepared_data)
     print(f'\nBest Lambda & Kappa values for machine {machine_name} are {lamb_val} and {kap_val}')
 
-    # MTBF weibull
+    # MTBF 
     MTBF_weibull = meantimebetweenfailure_weibull(lamb_val, kap_val)
+    print('The MTBF-Kaplan Meier is:', MTBF_KM)
     print('The MTBF-Weibull is:', MTBF_weibull)
 
     # Weibull data
     weibull_data = create_weibull_curve_data(prepared_data, lamb_val, kap_val)
-    print(weibull_data)
-
-    visualization(KM_data, weibull_data, machine_name)
+    weibull_data_to_plot = weibull_data[weibull_data['t'] <= KM_data['Duration'].max()]
+    visualization(KM_data, weibull_data_to_plot, machine_name)
     return
 
 run_analysis()
