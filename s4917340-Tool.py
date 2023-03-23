@@ -15,8 +15,13 @@ plot_path = os.path.join(root_path, 'plot')
 
 def data_preparation(machine_data : pd.DataFrame):
     machine_data['Censored'] = machine_data['Event'].map({'failure': 'No', 'PM':'Yes'})
-    machine_data['Duration'] = machine_data['Time'].diff(periods=1).fillna(machine_data['Time'].iloc[0])
+    machine_data['Duration'] = machine_data['Time'].diff().fillna(machine_data['Time'].iloc[0])
+
+    # foreach 0 (due to duplicated durations) replace with nan to fill the blank cells with the duration above it
+    machine_data['Duration'] = machine_data['Duration'].replace(0, np.nan).ffill()
+    
     machine_data = machine_data.sort_values(by='Duration', ascending=True)
+    
     # source: https://stackoverflow.com/questions/67845362/sort-pandas-df-subset-of-rows-within-a-group-by-specific-column 
     # source: https://sparkbyexamples.com/pandas/pandas-groupby-sort-within-groups/
     machine_data = machine_data.groupby('Duration', group_keys=True).apply(lambda x: x.sort_values(by=['Event'], ascending=False))
@@ -45,14 +50,13 @@ def create_kaplanmeier_data(prepared_data : pd.DataFrame):
     prepared_data = update_probabilities(prepared_data)
 
     # 3. Merge duplicated, failure (censored == No) durations 
-    # group the dataframe with duplicates by duration and aggrated sum on proability column
     grouped = prepared_data.groupby('Duration').agg({'Probability': 'sum'}).reset_index()
     prepared_data['summed_prob'] = prepared_data['Duration'].map(grouped.set_index('Duration')['Probability'])
     mask = (prepared_data.duplicated('Duration', keep=False)) & (prepared_data['Event'] == 'failure') #mark all duplicates
     prepared_data.loc[mask, 'Probability'] = prepared_data.loc[mask, 'summed_prob']
     mask2 = (prepared_data.duplicated('Duration')) & (prepared_data['Event'] == 'failure') # mark all dups besides the first one
     prepared_data.loc[mask2, 'Probability'] = 0
-    prepared_data = prepared_data.drop('summed_prob', axis=1)
+    prepared_data.drop(columns='summed_prob', axis=1, inplace=True)
 
     # 4. Calculate the reliability function for each duration 
     reliability = 1
@@ -117,7 +121,7 @@ def fit_weibull_distribution(prepared_data : pd.DataFrame):
     print(df_weibull)
     # get the optimal Lambda and Kappa based on the max Loglikelihood sum
     max_loglikelihood_sum = df_weibull['Loglikelihood_sum'].max() 
-    best_l_k = df_weibull[df_weibull['Loglikelihood_sum'] == max_loglikelihood_sum][['Lambda', 'Kappa']]
+    best_l_k = df_weibull[(df_weibull['Loglikelihood_sum'] == max_loglikelihood_sum)]
     return best_l_k['Lambda'].values[0], best_l_k['Kappa'].values[0]
 
 def create_weibull_curve_data(prepared_data : pd.DataFrame, lamb_val, kap_val):
@@ -132,7 +136,7 @@ def create_weibull_curve_data(prepared_data : pd.DataFrame, lamb_val, kap_val):
 def visualization(KM_data : pd.DataFrame, weibull_data : pd.DataFrame, machine_name):
     fig, ax = plt.subplots()
     ax.set_title(f'Visualization of reliability functions of machine {machine_name}')
-    ax.step(KM_data['Duration'], KM_data['Reliability'], where="post", label='Kaplan-Meier')
+    ax.step(KM_data['Duration'], KM_data['Reliability'], label='Kaplan-Meier')
     ax.plot(weibull_data['t'], weibull_data['R_t'], label='Weibull')
     ax.set_xlabel('Time')
     ax.set_ylabel('Reliability')
@@ -143,8 +147,6 @@ def visualization(KM_data : pd.DataFrame, weibull_data : pd.DataFrame, machine_n
 # Create a plot of the cost rates
 def plot_cost_rates(maintenance_data : pd.DataFrame, machine_name):
     fig, ax = plt.subplots()
-    x_min, x_max = 1, round(maintenance_data['t'].max())
-
     ax.set_title(f'Maintenance age impact on cost for machine {machine_name}')
     ax.plot(maintenance_data['t'], maintenance_data['cost_rate'])
     ax.set_xlabel('Time')
@@ -188,7 +190,6 @@ def run_analysis():
     MTBF_KM = meantimebetweenfailures_KM(KM_data)
 
     # Weibull fitting
-    print(prepared_data)
     lamb_val, kap_val = fit_weibull_distribution(prepared_data)
     print(f'\nBest Lambda & Kappa values for machine {machine_name} are {lamb_val} and {kap_val}')
 
