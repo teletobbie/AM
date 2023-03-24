@@ -6,6 +6,9 @@ import sys
 import seaborn as sns
 import matplotlib.pyplot as plt
 import itertools
+import time
+import warnings
+warnings.filterwarnings('ignore') 
 
 student_nr = 's4917340'
 root_path = os.path.join(sys.path[0])
@@ -118,7 +121,6 @@ def fit_weibull_distribution(prepared_data : pd.DataFrame):
     observation_columns = df_weibull.columns[df_weibull.columns.str.contains(pat='Observation')].tolist()
     # sum the loglikelihood of each observation per row
     df_weibull['Loglikelihood_sum'] = df_weibull[observation_columns].sum(axis=1)
-    print(df_weibull)
     # get the optimal Lambda and Kappa based on the max Loglikelihood sum
     max_loglikelihood_sum = df_weibull['Loglikelihood_sum'].max() 
     best_l_k = df_weibull[(df_weibull['Loglikelihood_sum'] == max_loglikelihood_sum)]
@@ -152,8 +154,6 @@ def plot_cost_rates(maintenance_data : pd.DataFrame, machine_name):
     fig, ax = plt.subplots()
     ax.set_title(f'Maintenance age impact on cost for machine {machine_name}')
 
-    print(maintenance_data)
-
     # specify the number of rows to select above and below
     if machine_name == 1:
         N = 1000
@@ -168,11 +168,12 @@ def plot_cost_rates(maintenance_data : pd.DataFrame, machine_name):
     ax.plot(data_to_plot['t'], data_to_plot['cost_rate'], label='cost')
     ax.scatter(x=optimal_t, y=optimal_cost_rate, marker='.', color='gray', s=200)
     ax.vlines(x=optimal_t, ymin=0, ymax=optimal_cost_rate, color='gray', linestyles='dashed', label='T optimal')
-    
+
     ax.set_xlabel('Time')
     ax.set_ylabel('Cost')
-    ax.legend()
+    ax.legend(['cost rate', 'T optimal'])
     plt.savefig(os.path.join(plot_path, f'{student_nr}-Machine-{machine_name}-Costs.png'))
+    plt.close()
 
 def create_cost_data(prepared_data : pd.DataFrame, l, k, PM_cost, CM_cost, machine_name):
     # 1. Define a range of maintenance ages 
@@ -199,36 +200,143 @@ def create_cost_data(prepared_data : pd.DataFrame, l, k, PM_cost, CM_cost, machi
     optimal = maintenance_data[maintenance_data['cost_rate'] == maintenance_data['cost_rate'].min()]
     return optimal['t'].values[0], optimal['cost_rate'].values[0]
 
-def run_analysis():
-    machine_name = 3
+def CBM_data_preperation(condition_data : pd.DataFrame):
+    condition_data['Increments'] = condition_data['Condition'].diff()
+    condition_data = condition_data[(condition_data['Increments'].notna()) & (condition_data['Increments'] > 0)].reset_index()
+    return condition_data
+
+def CBM_create_simulations(CBM_prepared_data : pd.DataFrame, failure_level, threshold):
+    n_of_simulations = 1000
+    simulation_data = pd.DataFrame()
+    for i in range(n_of_simulations):
+        state = 0
+        time = 0
+        while True:
+            state += np.random.choice(CBM_prepared_data['Increments'])
+            time += 1
+
+            if state > failure_level:
+                simulation_data.at[i, 'Duration'] = time
+                simulation_data.at[i, 'Event'] = 'failure'
+                break
+            if state > threshold:
+                simulation_data.at[i, 'Duration'] = time
+                simulation_data.at[i, 'Event'] = 'PM'
+                break
+
+    return simulation_data
+
+def CBM_analyse_costs(sample_data : pd.DataFrame, PM_cost, CM_cost):
+    mean_cycle_length = sample_data['Duration'].mean()
+    failure_cycles = len(sample_data[sample_data['Event'] == 'failure'])
+    pm_cycles = len(sample_data[sample_data['Event'] == 'PM'])
+    simulated_cycles = len(sample_data)
+    mean_cost_per_cycle = PM_cost * (pm_cycles/simulated_cycles) + CM_cost * (failure_cycles/simulated_cycles)
+    cost_rate = mean_cost_per_cycle / mean_cycle_length
+    return cost_rate
+
+def CBM_create_cost_data(prepared_condition_data : pd.DataFrame, PM_cost, CM_cost, failure_level, machine_name):
+    CBM_cost_data = pd.DataFrame()
+    thresholds = np.arange(0, 51)
+    for threshold in thresholds:
+        sample_data = CBM_create_simulations(prepared_condition_data, failure_level, threshold)
+        cost_rate = CBM_analyse_costs(sample_data, PM_cost, CM_cost)
+        CBM_cost_data.at[threshold, 'cost_rate'] = cost_rate
+
+    # get the optimal maintenance threshold & cost rate
+    optimal = CBM_cost_data[CBM_cost_data['cost_rate'] == CBM_cost_data['cost_rate'].min()]
+    
+    N = 10
+    fig, ax = plt.subplots()
+    CBM_cost_data[N:].plot(
+        title=f'Cost rate for different maintenance thresholds machine {machine_name}', 
+        xlim=(N,thresholds[-1]), 
+        ylim=(0, math.ceil(CBM_cost_data[N:]['cost_rate'].max())),
+        ax=ax
+    )
+    ax.scatter(x=optimal.index, y=optimal['cost_rate'], marker='.', color='gray', s=200)
+    ax.vlines(x=optimal.index, ymin=0, ymax=optimal['cost_rate'], color='gray', linestyles='dashed')
+    ax.legend(['Cost rates', 'Threshold optimal'])
+    ax.set_xlabel('Maintenance threshold (M)')
+    ax.set_ylabel('Cost rate')
+    plt.savefig(os.path.join(plot_path, f'{student_nr}-Machine-{machine_name}-CBM-Costs.png'))
+    plt.close()
+    return optimal['cost_rate'].values[0], optimal.index.values[0]
+
+
+def run_analysis(machine_name, PM_cost, CM_cost, analyse_CBM = 'no'):
     machine_data = pd.read_csv(os.path.join(data_path, f'{student_nr}-Machine-{machine_name}.csv'))
     prepared_data = data_preparation(machine_data)
+
+    # Kaplan-Meier estimation
     KM_data = create_kaplanmeier_data(prepared_data)
     plot_kaplanmeier_estimation(KM_data[['Duration', 'Reliability']], machine_name)
     MTBF_KM = meantimebetweenfailures_KM(KM_data)
 
     # Weibull fitting
     lamb_val, kap_val = fit_weibull_distribution(prepared_data)
-    print(f'\nBest Lambda & Kappa values for machine {machine_name} are {lamb_val} and {kap_val}')
-
-    # MTBF 
-    MTBF_weibull = meantimebetweenfailure_weibull(lamb_val, kap_val)
+    weibull_data = create_weibull_curve_data(prepared_data, lamb_val, kap_val)
+    MTBF_weibull = meantimebetweenfailure_weibull(lamb_val, kap_val) 
+    
     print('The MTBF-Kaplan Meier is:', MTBF_KM)
     print('The MTBF-Weibull is:', MTBF_weibull)
 
-    # Weibull data
-    weibull_data = create_weibull_curve_data(prepared_data, lamb_val, kap_val)
-
+    # Visualization
     visualization(KM_data, weibull_data, machine_name)
 
-    # Age-based maintenance
+    # # Age-based maintenance optimization
     PM_cost = 5
     CM_cost = 20
     best_age, best_cost_rate = create_cost_data(prepared_data, lamb_val, kap_val, PM_cost, CM_cost, machine_name)
-    print(best_age, best_cost_rate)
+    print('The optimal maintenance age is', best_age)
+    print('The best cost rate is', best_cost_rate)
+
+    if analyse_CBM == 'yes':
+        # Condition-based maintenance
+        condition_data = pd.read_csv(os.path.join(data_path, f'{student_nr}-Machine-{machine_name}-condition-data.csv'))
+        prepared_condition_data = CBM_data_preperation(condition_data)
+        
+        # Failure level
+        # Failure level is the highest condition in the dataset 
+        failure_level = prepared_condition_data['Condition'].max()
+
+        CBM_cost_rate, CBM_threshold = CBM_create_cost_data(prepared_condition_data, PM_cost, CM_cost, failure_level,   machine_name) 
+        print('The optimal cost rate under CBM is ', CBM_cost_rate) 
+        print('The optimal CBM threshold is ', CBM_threshold)
+    
     return
 
-run_analysis()
+def run():
+    print('Hello, welcome to the Assignment 2 tool used to guide maintenance decision making for 3 different machines')
+    print('Please answer the following questions to get started:')
+    while True:
+        try:
+            analyse_CBM = 'no'
+            machine_name = int(input('What machine should be analysed (1,2 or 3?): ').lower())
+            if machine_name not in (1,2,3):
+                print('You can only choose between machines 1, 2, or 3')
+                continue
+            PM_cost = int(input('What is the PM cost?: '))
+            CM_cost = int(input('What is the CM cost?: '))
+            if machine_name == 3:
+                analyse_CBM = input('Do you want to include a condition-based maintenance analysis for machine 3? (yes/no) ').lower()
+            print(f'Oke, let start with the analysis using these input values')
+            time.sleep(2)
+            run_analysis(machine_name, PM_cost, CM_cost, analyse_CBM)
+            print('Analysis done, goodbye!')
+            break
+        except ValueError:
+            print('Error within the input field, try again')
+            continue
+        except Exception as e:
+            print('Crash error something bad happend during the analysis, I am closing now with error:', e)
+            break
+
+# run the program
+run()
+
+
+
 
 
 
