@@ -146,11 +146,32 @@ def visualization(KM_data : pd.DataFrame, weibull_data : pd.DataFrame, machine_n
 
 # Create a plot of the cost rates
 def plot_cost_rates(maintenance_data : pd.DataFrame, machine_name):
+    opt_idx = maintenance_data.index[maintenance_data['cost_rate'] == maintenance_data['cost_rate'].min()].values[0]
+    optimal_cost_rate = maintenance_data.iloc[opt_idx]['cost_rate']
+    optimal_t = maintenance_data.iloc[opt_idx]['t']
     fig, ax = plt.subplots()
     ax.set_title(f'Maintenance age impact on cost for machine {machine_name}')
-    ax.plot(maintenance_data['t'], maintenance_data['cost_rate'])
+
+    print(maintenance_data)
+
+    # specify the number of rows to select above and below
+    if machine_name == 1:
+        N = 1000
+    elif machine_name == 2:
+        N = 91000
+    elif machine_name == 3:
+        N = 500
+    
+    # select the rows above and below the specified row to plot
+    data_to_plot = maintenance_data.iloc[max(0, opt_idx-N) : min(opt_idx+N+1, len(maintenance_data))]
+    # data_to_plot = maintenance_data.iloc[opt_idx-N : opt_idx+N]
+    ax.plot(data_to_plot['t'], data_to_plot['cost_rate'], label='cost')
+    ax.scatter(x=optimal_t, y=optimal_cost_rate, marker='.', color='gray', s=200)
+    ax.vlines(x=optimal_t, ymin=0, ymax=optimal_cost_rate, color='gray', linestyles='dashed', label='T optimal')
+    
     ax.set_xlabel('Time')
     ax.set_ylabel('Cost')
+    ax.legend()
     plt.savefig(os.path.join(plot_path, f'{student_nr}-Machine-{machine_name}-Costs.png'))
 
 def create_cost_data(prepared_data : pd.DataFrame, l, k, PM_cost, CM_cost, machine_name):
@@ -163,16 +184,13 @@ def create_cost_data(prepared_data : pd.DataFrame, l, k, PM_cost, CM_cost, machi
     # 3. Calculate the mean cost per cycle (MCPC) for each maintenance age 
     maintenance_data['MCPC'] = CM_cost * maintenance_data['F_t'] + PM_cost * maintenance_data['R_t']
     # 4. Calculate the mean cycle length (MCL) by approximating the area under curve using Riemann sum
+
     delta = 0.01
-    t = maintenance_data['t'].values
-    R_t = maintenance_data['R_t'].values
-    riemann_sum = 0
-    for i in range(len(t)):
-        riemann_sum += R_t[i] * delta
+    cumulative_sum = maintenance_data['R_t'].cumsum()
+    maintenance_data['riemann_sum'] = cumulative_sum * delta
 
     # 5. Calculate the cost rate for each maintenance age
-    maintenance_data['cost_rate'] = maintenance_data['MCPC'] / riemann_sum
-    print(maintenance_data)
+    maintenance_data['cost_rate'] = maintenance_data['MCPC'] / maintenance_data['riemann_sum']
 
     # 6. Create a plot of cost rates
     plot_cost_rates(maintenance_data, machine_name)
@@ -182,7 +200,7 @@ def create_cost_data(prepared_data : pd.DataFrame, l, k, PM_cost, CM_cost, machi
     return optimal['t'].values[0], optimal['cost_rate'].values[0]
 
 def run_analysis():
-    machine_name = 1
+    machine_name = 3
     machine_data = pd.read_csv(os.path.join(data_path, f'{student_nr}-Machine-{machine_name}.csv'))
     prepared_data = data_preparation(machine_data)
     KM_data = create_kaplanmeier_data(prepared_data)
