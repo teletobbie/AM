@@ -29,6 +29,7 @@ def data_preparation(machine_data : pd.DataFrame):
     # source: https://sparkbyexamples.com/pandas/pandas-groupby-sort-within-groups/
     machine_data = machine_data.groupby('Duration', group_keys=True).apply(lambda x: x.sort_values(by=['Event'], ascending=False))
     machine_data = machine_data.reset_index(drop=True)
+    print(machine_data)
 
     return machine_data
 
@@ -238,7 +239,11 @@ def CBM_analyse_costs(sample_data : pd.DataFrame, PM_cost, CM_cost):
 def CBM_create_cost_data(prepared_condition_data : pd.DataFrame, PM_cost, CM_cost, failure_level, machine_name):
     CBM_cost_data = pd.DataFrame()
     thresholds = np.arange(0, 51)
+    percentiles = np.percentile(thresholds, [0, 20, 40, 60, 80, 100]).tolist()
     for threshold in thresholds:
+        if threshold in percentiles:
+            percentage = "{:.0%}".format(threshold / thresholds.max())
+            print(f'CBM Analysis at {percentage}', end='\r', flush=True)
         sample_data = CBM_create_simulations(prepared_condition_data, failure_level, threshold)
         cost_rate = CBM_analyse_costs(sample_data, PM_cost, CM_cost)
         CBM_cost_data.at[threshold, 'cost_rate'] = cost_rate
@@ -285,13 +290,12 @@ def run_analysis(machine_name, PM_cost, CM_cost, analyse_CBM = 'no'):
     visualization(KM_data, weibull_data, machine_name)
 
     # # Age-based maintenance optimization
-    PM_cost = 5
-    CM_cost = 20
     best_age, best_cost_rate = create_cost_data(prepared_data, lamb_val, kap_val, PM_cost, CM_cost, machine_name)
     print('The optimal maintenance age is', best_age)
     print('The best cost rate is', best_cost_rate)
 
     if analyse_CBM == 'yes':
+        print('\nStart with the Condition-based maintenance analysis')
         # Condition-based maintenance
         condition_data = pd.read_csv(os.path.join(data_path, f'{student_nr}-Machine-{machine_name}-condition-data.csv'))
         prepared_condition_data = CBM_data_preperation(condition_data)
@@ -300,40 +304,45 @@ def run_analysis(machine_name, PM_cost, CM_cost, analyse_CBM = 'no'):
         # Failure level is the highest condition in the dataset 
         failure_level = prepared_condition_data['Condition'].max()
 
-        CBM_cost_rate, CBM_threshold = CBM_create_cost_data(prepared_condition_data, PM_cost, CM_cost, failure_level,   machine_name) 
+        CBM_cost_rate, CBM_threshold = CBM_create_cost_data(prepared_condition_data, PM_cost, CM_cost, failure_level, machine_name) 
         print('The optimal cost rate under CBM is ', CBM_cost_rate) 
         print('The optimal CBM threshold is ', CBM_threshold)
     
     return
 
 def run():
-    print('Hello, welcome to the Assignment 2 tool used to guide maintenance decision making for 3 different machines')
-    print('Please answer the following questions to get started:')
+    if not os.path.exists(plot_path):
+        os.mkdir(plot_path)
+    if not os.path.exists(data_path):
+        print(f'No data folder has been found at {data_path}, \nI need data to work with first...')
+        return
     while True:
+        print('Hello, welcome to the Assignment 2 tool used to guide maintenance decision-making for 3 different machines')
+        print('Please answer the following questions to get started:')
         try:
             analyse_CBM = 'no'
             machine_name = int(input('What machine should be analysed (1,2 or 3?): ').lower())
             if machine_name not in (1,2,3):
-                print('You can only choose between machines 1, 2, or 3')
+                print('You can only choose between machines 1, 2, or 3\n')
                 continue
             PM_cost = int(input('What is the PM cost?: '))
             CM_cost = int(input('What is the CM cost?: '))
             if machine_name == 3:
                 analyse_CBM = input('Do you want to include a condition-based maintenance analysis for machine 3? (yes/no) ').lower()
             print(f'Oke, let start with the analysis using these input values')
-            time.sleep(2)
+            time.sleep(1)
             run_analysis(machine_name, PM_cost, CM_cost, analyse_CBM)
-            print('Analysis done, goodbye!')
-            break
+            print('Analysis done! See the plot folder for graphs. \n')
         except ValueError:
-            print('Error within the input field, try again')
+            print('Error within the input field, try again\n')
             continue
         except Exception as e:
             print('Crash error something bad happend during the analysis, I am closing now with error:', e)
             break
 
 # run the program
-run()
+# run()
+run_analysis(3, 50, 80)
 
 
 
