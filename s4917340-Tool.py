@@ -29,7 +29,6 @@ def data_preparation(machine_data : pd.DataFrame):
     # source: https://sparkbyexamples.com/pandas/pandas-groupby-sort-within-groups/
     machine_data = machine_data.groupby('Duration', group_keys=True).apply(lambda x: x.sort_values(by=['Event'], ascending=False))
     machine_data = machine_data.reset_index(drop=True)
-    print(machine_data)
 
     return machine_data
 
@@ -85,6 +84,7 @@ def plot_kaplanmeier_estimation(data, machine_name):
     plt.title(f'Kaplan-Meier estimator for machine {machine_name}')
     sns.lineplot(x="Duration", y="Reliability", data=data)
     plt.savefig(os.path.join(plot_path, f'Kaplan-Meier-results-machine-{machine_name}.png'))
+    plt.close()
 
 #Weibull distribution fitting
 def fit_weibull_distribution(prepared_data : pd.DataFrame):
@@ -152,24 +152,13 @@ def plot_cost_rates(maintenance_data : pd.DataFrame, machine_name):
     opt_idx = maintenance_data.index[maintenance_data['cost_rate'] == maintenance_data['cost_rate'].min()].values[0]
     optimal_cost_rate = maintenance_data.iloc[opt_idx]['cost_rate']
     optimal_t = maintenance_data.iloc[opt_idx]['t']
+
     fig, ax = plt.subplots()
     ax.set_title(f'Maintenance age impact on cost for machine {machine_name}')
-
-    # specify the number of rows to select above and below
-    if machine_name == 1:
-        N = 1000
-    elif machine_name == 2:
-        N = 91000
-    elif machine_name == 3:
-        N = 500
-    
-    # select the rows above and below the specified row to plot
-    data_to_plot = maintenance_data.iloc[max(0, opt_idx-N) : min(opt_idx+N+1, len(maintenance_data))]
-    # data_to_plot = maintenance_data.iloc[opt_idx-N : opt_idx+N]
+    data_to_plot = maintenance_data[maintenance_data['cost_rate'] <= optimal_cost_rate+10]
     ax.plot(data_to_plot['t'], data_to_plot['cost_rate'], label='cost')
     ax.scatter(x=optimal_t, y=optimal_cost_rate, marker='.', color='gray', s=200)
     ax.vlines(x=optimal_t, ymin=0, ymax=optimal_cost_rate, color='gray', linestyles='dashed', label='T optimal')
-
     ax.set_xlabel('Time')
     ax.set_ylabel('Cost')
     ax.legend(['cost rate', 'T optimal'])
@@ -186,7 +175,6 @@ def create_cost_data(prepared_data : pd.DataFrame, l, k, PM_cost, CM_cost, machi
     # 3. Calculate the mean cost per cycle (MCPC) for each maintenance age 
     maintenance_data['MCPC'] = CM_cost * maintenance_data['F_t'] + PM_cost * maintenance_data['R_t']
     # 4. Calculate the mean cycle length (MCL) by approximating the area under curve using Riemann sum
-
     delta = 0.01
     cumulative_sum = maintenance_data['R_t'].cumsum()
     maintenance_data['riemann_sum'] = cumulative_sum * delta
@@ -250,15 +238,21 @@ def CBM_create_cost_data(prepared_condition_data : pd.DataFrame, PM_cost, CM_cos
 
     # get the optimal maintenance threshold & cost rate
     optimal = CBM_cost_data[CBM_cost_data['cost_rate'] == CBM_cost_data['cost_rate'].min()]
-    
+
     N = 10
     fig, ax = plt.subplots()
-    CBM_cost_data[N:].plot(
+    # CBM_cost_data[N:].plot(
+    #     title=f'Cost rate for different maintenance thresholds machine {machine_name}', 
+    #     xlim=(N,thresholds[-1]), 
+    #     ylim=(0, math.ceil(CBM_cost_data[N:]['cost_rate'].max())),
+    #     ax=ax
+    # )
+
+    CBM_cost_data.plot(
         title=f'Cost rate for different maintenance thresholds machine {machine_name}', 
-        xlim=(N,thresholds[-1]), 
-        ylim=(0, math.ceil(CBM_cost_data[N:]['cost_rate'].max())),
         ax=ax
-    )
+    )    
+
     ax.scatter(x=optimal.index, y=optimal['cost_rate'], marker='.', color='gray', s=200)
     ax.vlines(x=optimal.index, ymin=0, ymax=optimal['cost_rate'], color='gray', linestyles='dashed')
     ax.legend(['Cost rates', 'Threshold optimal'])
@@ -305,8 +299,8 @@ def run_analysis(machine_name, PM_cost, CM_cost, analyse_CBM = 'no'):
         failure_level = prepared_condition_data['Condition'].max()
 
         CBM_cost_rate, CBM_threshold = CBM_create_cost_data(prepared_condition_data, PM_cost, CM_cost, failure_level, machine_name) 
-        print('The optimal cost rate under CBM is ', CBM_cost_rate) 
-        print('The optimal CBM threshold is ', CBM_threshold)
+        print('The optimal cost rate under CBM is', CBM_cost_rate) 
+        print('The optimal CBM threshold is', CBM_threshold)
     
     return
 
@@ -341,8 +335,7 @@ def run():
             break
 
 # run the program
-# run()
-run_analysis(3, 50, 80)
+run()
 
 
 
