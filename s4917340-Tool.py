@@ -6,7 +6,6 @@ import sys
 import seaborn as sns
 import matplotlib.pyplot as plt
 import itertools
-import time
 import warnings
 warnings.filterwarnings('ignore') 
 
@@ -17,16 +16,21 @@ plot_path = os.path.join(root_path, 'plot')
 # pd.set_option('display.max_rows', None)
 
 def data_preparation(machine_data : pd.DataFrame):
+    # create an cersored column based on the event column
     machine_data['Censored'] = machine_data['Event'].map({'failure': 'No', 'PM':'Yes'})
+    # Calculate the duration by time difference of a time compared with the time in the previous row
+    # fill the nan values (from the first row) with its time value 
     machine_data['Duration'] = machine_data['Time'].diff().fillna(machine_data['Time'].iloc[0])
 
     # foreach 0 (due to duplicated durations) replace with nan to fill the blank cells with the duration above it
     machine_data['Duration'] = machine_data['Duration'].replace(0, np.nan).ffill()
-    
+    # sort the durations from low to high 
     machine_data = machine_data.sort_values(by='Duration', ascending=True)
     
+    # sort duplicated durations such that PM events comes before the failure events
     # source: https://stackoverflow.com/questions/67845362/sort-pandas-df-subset-of-rows-within-a-group-by-specific-column 
     # source: https://sparkbyexamples.com/pandas/pandas-groupby-sort-within-groups/
+    # group the data by duration and sort each group of durations from high to low and reset the index. 
     machine_data = machine_data.groupby('Duration', group_keys=True).apply(lambda x: x.sort_values(by=['Event'], ascending=False))
     machine_data = machine_data.reset_index(drop=True)
 
@@ -36,11 +40,16 @@ def data_preparation(machine_data : pd.DataFrame):
 def update_probabilities(prepared_data : pd.DataFrame):
     for index, row in prepared_data.iterrows():
         if row['Event'] == 'PM':
+            # get the remaining rows underneath the current row
             remaining_rows = prepared_data.iloc[index+1:]
+            # get the number of remaining rows
             num_remaining_rows = len(remaining_rows)
+            # get the probability to distribute over the remaining rows
             prob_to_distribute = row['Probability']
+            # spread the probability to distribute evenly over the number of remaining rows 
             prob_to_distribute_per_row = prob_to_distribute / num_remaining_rows
             remaining_rows.loc[:, 'Probability'] += prob_to_distribute_per_row
+            # set the probability of the current row to zero
             prepared_data.at[index, 'Probability'] = 0
     
     return prepared_data
@@ -53,16 +62,27 @@ def create_kaplanmeier_data(prepared_data : pd.DataFrame):
     prepared_data = update_probabilities(prepared_data)
 
     # 3. Merge duplicated, failure (censored == No) durations 
+    # group data by duration and sum the probability for each group 
     grouped = prepared_data.groupby('Duration').agg({'Probability': 'sum'}).reset_index()
+
+    # map the summed probabilities of the duration to an summed probability column
     prepared_data['summed_prob'] = prepared_data['Duration'].map(grouped.set_index('Duration')['Probability'])
+
+    # create an filter taking all the duplicated durations that are associated with an failure, and use this filter to change the current probablity to the summed probability
     mask = (prepared_data.duplicated('Duration', keep=False)) & (prepared_data['Event'] == 'failure') #mark all duplicates
     prepared_data.loc[mask, 'Probability'] = prepared_data.loc[mask, 'summed_prob']
+
+    # create an filter taking the duplicated durations except the first one that are associated with an failure,and use this filter to change other durations to 0 
     mask2 = (prepared_data.duplicated('Duration')) & (prepared_data['Event'] == 'failure') # mark all dups besides the first one
     prepared_data.loc[mask2, 'Probability'] = 0
+
+    # remove the summed probability column 
     prepared_data.drop(columns='summed_prob', axis=1, inplace=True)
 
     # 4. Calculate the reliability function for each duration 
+    # start with an reliability of 1 (100%)
     reliability = 1
+    # foreach row in data, check if event is an failure, if so decrement the proability of the reliablity and set it as the new reliablity for that row
     for index, row in prepared_data.iterrows():
         if row['Event'] == 'failure':
             reliability -= row['Probability']
@@ -89,11 +109,12 @@ def plot_kaplanmeier_estimation(data, machine_name):
 #Weibull distribution fitting
 def fit_weibull_distribution(prepared_data : pd.DataFrame):
     # 1. Create a variable with the search ranges for lambda and kappa
-    l_range = np.linspace(start=1, stop=35, num=10)
-    k_range = np.linspace(start=0.1, stop=3.5, num=10)
+    l_range = np.linspace(start=1, stop=35, num=35)
+    k_range = np.linspace(start=0.1, stop=3.5, num=35)
 
     # 2. Create a dataframe which will contain your likelihood data
-    #source: https://stackoverflow.com/questions/1208118/using-numpy-to-build-an-array-of-all-combinations-of-two-arrays 
+    # Create pairs foreach Kappa and Lambda value
+    # source: https://stackoverflow.com/questions/1208118/using-numpy-to-build-an-array-of-all-combinations-of-two-arrays 
     pairs = np.array(list(itertools.product(l_range, k_range)))
     df_weibull = pd.DataFrame(columns=['Lambda', 'Kappa'], data=pairs)
 
@@ -195,7 +216,7 @@ def CBM_data_preperation(condition_data : pd.DataFrame):
     return condition_data
 
 def CBM_create_simulations(CBM_prepared_data : pd.DataFrame, failure_level, threshold):
-    n_of_simulations = 1000
+    n_of_simulations = 10000
     simulation_data = pd.DataFrame()
     for i in range(n_of_simulations):
         state = 0
@@ -211,23 +232,28 @@ def CBM_create_simulations(CBM_prepared_data : pd.DataFrame, failure_level, thre
             if state > threshold:
                 simulation_data.at[i, 'Duration'] = time
                 simulation_data.at[i, 'Event'] = 'PM'
-                break
-
+                break     
     return simulation_data
 
 def CBM_analyse_costs(sample_data : pd.DataFrame, PM_cost, CM_cost):
+    # calculate the mean cycle length by taking the mean of all durations
     mean_cycle_length = sample_data['Duration'].mean()
+    # Get the number of failure events
     failure_cycles = len(sample_data[sample_data['Event'] == 'failure'])
+    # Get the number of Preventive maintenance events
     pm_cycles = len(sample_data[sample_data['Event'] == 'PM'])
+    # Get the total number of events
     simulated_cycles = len(sample_data)
+    # Calculate the mean cost per cycle based on PM cost * PM events + CM cost * CM events
     mean_cost_per_cycle = PM_cost * (pm_cycles/simulated_cycles) + CM_cost * (failure_cycles/simulated_cycles)
+    # Calculate the cost rate
     cost_rate = mean_cost_per_cycle / mean_cycle_length
     return cost_rate
 
 def CBM_create_cost_data(prepared_condition_data : pd.DataFrame, PM_cost, CM_cost, failure_level, machine_name):
     CBM_cost_data = pd.DataFrame()
     thresholds = np.arange(0, 51)
-    percentiles = np.percentile(thresholds, [0, 20, 40, 60, 80, 100]).tolist()
+    percentiles = np.percentile(thresholds, np.arange(0, 100)).tolist()
     for threshold in thresholds:
         if threshold in percentiles:
             percentage = "{:.0%}".format(threshold / thresholds.max())
@@ -235,23 +261,17 @@ def CBM_create_cost_data(prepared_condition_data : pd.DataFrame, PM_cost, CM_cos
         sample_data = CBM_create_simulations(prepared_condition_data, failure_level, threshold)
         cost_rate = CBM_analyse_costs(sample_data, PM_cost, CM_cost)
         CBM_cost_data.at[threshold, 'cost_rate'] = cost_rate
-
     # get the optimal maintenance threshold & cost rate
     optimal = CBM_cost_data[CBM_cost_data['cost_rate'] == CBM_cost_data['cost_rate'].min()]
 
     N = 10
     fig, ax = plt.subplots()
-    # CBM_cost_data[N:].plot(
-    #     title=f'Cost rate for different maintenance thresholds machine {machine_name}', 
-    #     xlim=(N,thresholds[-1]), 
-    #     ylim=(0, math.ceil(CBM_cost_data[N:]['cost_rate'].max())),
-    #     ax=ax
-    # )
-
-    CBM_cost_data.plot(
+    CBM_cost_data[N:].plot(
         title=f'Cost rate for different maintenance thresholds machine {machine_name}', 
+        xlim=(N,thresholds[-1]), 
+        ylim=(0, math.ceil(CBM_cost_data[N:]['cost_rate'].max())),
         ax=ax
-    )    
+    )   
 
     ax.scatter(x=optimal.index, y=optimal['cost_rate'], marker='.', color='gray', s=200)
     ax.vlines(x=optimal.index, ymin=0, ymax=optimal['cost_rate'], color='gray', linestyles='dashed')
@@ -277,20 +297,23 @@ def run_analysis(machine_name, PM_cost, CM_cost, analyse_CBM = 'no'):
     weibull_data = create_weibull_curve_data(prepared_data, lamb_val, kap_val)
     MTBF_weibull = meantimebetweenfailure_weibull(lamb_val, kap_val) 
     
+    print(f'Best lambda = {lamb_val} and kappa = {kap_val} values for machine {machine_name}') 
     print('The MTBF-Kaplan Meier is:', MTBF_KM)
     print('The MTBF-Weibull is:', MTBF_weibull)
+    print('Cost of raw corrective maintenance is', CM_cost/MTBF_weibull)
 
     # Visualization
     visualization(KM_data, weibull_data, machine_name)
 
     # # Age-based maintenance optimization
+    print('\nStart with the age-based maintenance optimization')
     best_age, best_cost_rate = create_cost_data(prepared_data, lamb_val, kap_val, PM_cost, CM_cost, machine_name)
     print('The optimal maintenance age is', best_age)
     print('The best cost rate is', best_cost_rate)
 
+    # Condition-based maintenance
     if analyse_CBM == 'yes':
         print('\nStart with the Condition-based maintenance analysis')
-        # Condition-based maintenance
         condition_data = pd.read_csv(os.path.join(data_path, f'{student_nr}-Machine-{machine_name}-condition-data.csv'))
         prepared_condition_data = CBM_data_preperation(condition_data)
         
@@ -323,8 +346,7 @@ def run():
             CM_cost = int(input('What is the CM cost?: '))
             if machine_name == 3:
                 analyse_CBM = input('Do you want to include a condition-based maintenance analysis for machine 3? (yes/no) ').lower()
-            print(f'Oke, let start with the analysis using these input values')
-            time.sleep(1)
+            print(f'Oke, let start with the analysis of machine {machine_name} using these input values')
             run_analysis(machine_name, PM_cost, CM_cost, analyse_CBM)
             print('Analysis done! See the plot folder for graphs. \n')
         except ValueError:
