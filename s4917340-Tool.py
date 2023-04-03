@@ -120,6 +120,7 @@ def fit_weibull_distribution(prepared_data : pd.DataFrame):
 
     # 3. Create  log-likelihood  data  for  each  event  in  your  dataset.
     for observation_index, observation_row in prepared_data.iterrows():
+        print(observation_index+1, 'observations out of', len(prepared_data), 'to analyse', end='\r', flush=True)
         column_name = 'Observation ' + str(observation_index)
         for row_index in range(len(df_weibull)):
             l = df_weibull.loc[row_index, 'Lambda']
